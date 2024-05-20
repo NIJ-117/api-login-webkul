@@ -14,12 +14,14 @@ from dotenv import load_dotenv
 from random import randint
 import bcrypt
 import re
+
+#Initilize the FastAPI app
 app = FastAPI()
 
-# Database connection and table creation logic here (same as before)
+# Load environment variables from a .env file
 load_dotenv()
 
-# Database setup and connection
+# Function to create a connection to the SQLite database
 def create_connection(db_file):
     """Create a database connection to the SQLite database specified by db_file"""
     conn = None
@@ -30,6 +32,7 @@ def create_connection(db_file):
         print(e)
     return conn
 
+# Function to create the users table in the SQLite Database
 def create_table(conn):
     """Create a table from the create_table_sql statement"""
     try:
@@ -70,32 +73,40 @@ def initialize_database(db_file):
             print("Error! Cannot create the database connection.")
     return conn
 
+#Path to the SQLite database file
 db_file = "user_data.db"
+
+#Initialize the database
 initialize_database(db_file)
 
+#Pydantic model for forgot password request body
 class ForgotPasswordRequest(BaseModel):
     username: str
     email: str
 
+#Pydantic modle for reset password request body
 class ResetPasswordRequest(BaseModel):
     username: str
     otp: int
     new_password: str
 
-# Pydantic models for request bodies
+# Pydantic models for signup request body
 class SignupUser(BaseModel):
     username: str
     email: str
     password: str
 
+#Pydantic model for userverification request body
 class VerifyUser(BaseModel):
     email: str
     otp: int
 
+# Pydantic model for login request body
 class LoginUser(BaseModel):
     username: str
     password: str
 
+#Pydantic model for delete user request body
 class DeleteUserRequest(BaseModel):
     username: str
     password: str
@@ -106,7 +117,7 @@ def send_otp_email(receiver_email,otp):
     sender_password = os.getenv("EMAIL_PASSWORD")
     #otp = randint(100000, 999999)  # Generate a 6-digit OTP
 
-    # Setup the MIME
+    # Setup the MIME (Multipurpose Internet Mail Extensions)
     message = MIMEMultipart()
     message['From'] = sender_email
     message['To'] = receiver_email
@@ -114,19 +125,20 @@ def send_otp_email(receiver_email,otp):
     msg_body = f"Hello, your OTP for registration is: {otp}"
     message.attach(MIMEText(msg_body, 'plain'))
 
-    # Create SMTP session
-    server = smtplib.SMTP('smtp.gmail.com', 587)  # Use 465 for SSL
+    # Create SMTP session for sentind teh email
+    server = smtplib.SMTP('smtp.gmail.com', 587) 
     server.starttls()
     server.login(sender_email, sender_password)
     text = message.as_string()
     server.sendmail(sender_email, receiver_email, text)
     print("mail is sent")
-    server.quit()
+    server.quit() # Quit the SMTP server
 
     return otp
 # Signup function
 
 def generate_otp():
+    # Generate 6-digit OTP
     return randint(100000, 999999)
 
 
@@ -150,19 +162,23 @@ def delete_user(conn, username):
 # Endpoints
 
 def validate_password(password: str) -> bool:
-    # Minimum 8 characters, at least one uppercase letter, one lowercase letter, one number and one special character
+    """Validate the password to ensure it meets security criteria:
+    Minimum 8 characters, at least one uppercase letter, one lowercase letter,
+    one number, and one special character"""
     pattern = re.compile(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$')
     return bool(pattern.match(password))
 
 @app.post("/signup/")
 def signup(user: SignupUser):
+    # Endpoint to Signup
     if not validate_password(user.password):
         raise HTTPException(status_code=400, detail="Password does not meet the required standards. Must be at least 8 characters long, contain an uppercase letter, a lowercase letter, a number, and a special character.")
     
     conn = create_connection("user_data.db")
     if conn is not None:
         cursor = conn.cursor()
-        # Check if the username or email already exists
+
+        # Check if the username or email already exists in the database
         cursor.execute("SELECT username, email FROM users WHERE username = ? OR email = ?", (user.username, user.email))
         existing_user = cursor.fetchone()
         
@@ -178,9 +194,12 @@ def signup(user: SignupUser):
         hashed_password = bcrypt.hashpw(user.password.encode('utf-8'), bcrypt.gensalt())
         otp=generate_otp()
         try:
+            # Insert new user to the database
             cursor.execute("INSERT INTO users (username, email, password, registration_otp, email_verified) VALUES (?, ?, ?, ?, 0)",
                            (user.username, user.email, hashed_password, otp))
             conn.commit()
+
+            # send otp to the user's email for verification
             send_otp_email(user.email,otp)
             return {"message": "Signup successful. Please verify your email to complete registration."}
         except sqlite3.IntegrityError as e:
@@ -190,12 +209,17 @@ def signup(user: SignupUser):
 
 @app.post("/verify-email/")
 def verify_email(verification: VerifyUser):
+
+    #Endpoint to handle email verification
     conn = create_connection("user_data.db")
     if conn is not None:
         cursor = conn.cursor()
+        
+        #Retrieve the OTP for the given email from the database
         cursor.execute("SELECT registration_otp FROM users WHERE email = ?", (verification.email,))
         record = cursor.fetchone()
         if record and record[0] == verification.otp:
+            # Update the user record to mark email as verified and clear the registration OTP
             cursor.execute("UPDATE users SET email_verified = 1, registration_otp = NULL WHERE email = ?", (verification.email,))
             conn.commit()
             return {"message": "Email verified successfully. Your account is now active."}
@@ -206,6 +230,8 @@ def verify_email(verification: VerifyUser):
 
 @app.post("/login/")
 def login(user: LoginUser):
+    # Endpoint to handle user login
+
     conn = create_connection("user_data.db")
     if conn is not None:
         cursor = conn.cursor()
@@ -243,15 +269,20 @@ def login(user: LoginUser):
 
 @app.post("/forgot-password/")
 def forgot_password(request: ForgotPasswordRequest):
+    #Endpoint to handle forgotten password requests
     conn = create_connection("user_data.db")
     if conn is not None:
         cursor = conn.cursor()
+        #check if the username exists and the email matches
         cursor.execute("SELECT email FROM users WHERE username = ?", (request.username,))
         record = cursor.fetchone()
         if record and record[0] == request.email:
             # otp = send_otp_email(request.email)
+
+            # Generate and send OTP to the user's email
             otp=generate_otp()
             send_otp_email(request.email,otp)
+            # Store the OTP in the database for future verification
             cursor.execute("UPDATE users SET reset_otp = ? WHERE username = ?", (otp, request.username))
             conn.commit()
             return {"message": "OTP sent to your email. Please check your email to reset your password."}
@@ -262,7 +293,9 @@ def forgot_password(request: ForgotPasswordRequest):
 
 @app.post("/reset-password/")
 def reset_password(request: ResetPasswordRequest):
+    #Endpoint to handle password reset requests
     conn = create_connection("user_data.db")
+    # Validate the new password using the validation function
     if not validate_password(request.new_password):
         raise HTTPException(status_code=400, detail="Password does not meet the required standards. Must be at least 8 characters long, contain an uppercase letter, a lowercase letter, a number, and a special character.")
     
@@ -285,6 +318,7 @@ def reset_password(request: ResetPasswordRequest):
 
 @app.delete("/delete/")
 def api_delete_user(user: DeleteUserRequest):
+    # Endpoint to handle user deletion request
     conn = create_connection("user_data.db")
     if conn is not None:
         cursor = conn.cursor()
@@ -294,11 +328,14 @@ def api_delete_user(user: DeleteUserRequest):
 
         if record:
             stored_password = record[0]
+
             # Check if the provided password matches the stored password
             if hashlib.sha256(user.password.encode()).hexdigest() == stored_password:
+
                 # Proceed with deleting the user
                 if delete_user(conn, user.username):
                     return {"message": "User deleted successfully."}
+                
                 else:
                     raise HTTPException(status_code=404, detail="No user found with that username.")
             else:
@@ -312,4 +349,5 @@ def api_delete_user(user: DeleteUserRequest):
 
 if __name__ == "__main__":
     import uvicorn
+    # run FastAPI app using uvicorn server
     uvicorn.run(app, host="0.0.0.0", port=8000)
