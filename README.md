@@ -10,6 +10,10 @@ This repository contains a FastAPI-based user authentication system, including s
 - Forgot Password functionality with OTP-based password reset
 - Delete user account
 
+**FastAPI signup and login system Installation process** :  [watch the youtube video](https://www.youtube.com/watch?v=BTyzpoO_CFc)
+
+**FastAPI signup and login system demo video** : [watch the youtube video](https://www.youtube.com/watch?v=y9YWkSt078M)
+
 ## Installation
 
 ### Prerequisites
