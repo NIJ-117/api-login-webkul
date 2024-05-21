@@ -14,14 +14,12 @@ from dotenv import load_dotenv
 from random import randint
 import bcrypt
 import re
-
-#Initilize the FastAPI app
 app = FastAPI()
 
-# Load environment variables from a .env file
+# Database connection and table creation logic here (same as before)
 load_dotenv()
 
-# Function to create a connection to the SQLite database
+# Database setup and connection
 def create_connection(db_file):
     """Create a database connection to the SQLite database specified by db_file"""
     conn = None
@@ -32,7 +30,6 @@ def create_connection(db_file):
         print(e)
     return conn
 
-# Function to create the users table in the SQLite Database
 def create_table(conn):
     """Create a table from the create_table_sql statement"""
     try:
@@ -73,40 +70,32 @@ def initialize_database(db_file):
             print("Error! Cannot create the database connection.")
     return conn
 
-#Path to the SQLite database file
 db_file = "user_data.db"
-
-#Initialize the database
 initialize_database(db_file)
 
-#Pydantic model for forgot password request body
 class ForgotPasswordRequest(BaseModel):
     username: str
     email: str
 
-#Pydantic modle for reset password request body
 class ResetPasswordRequest(BaseModel):
     username: str
     otp: int
     new_password: str
 
-# Pydantic models for signup request body
+# Pydantic models for request bodies
 class SignupUser(BaseModel):
     username: str
     email: str
     password: str
 
-#Pydantic model for userverification request body
 class VerifyUser(BaseModel):
     email: str
     otp: int
 
-# Pydantic model for login request body
 class LoginUser(BaseModel):
     username: str
     password: str
 
-#Pydantic model for delete user request body
 class DeleteUserRequest(BaseModel):
     username: str
     password: str
@@ -117,7 +106,7 @@ def send_otp_email(receiver_email,otp):
     sender_password = os.getenv("EMAIL_PASSWORD")
     #otp = randint(100000, 999999)  # Generate a 6-digit OTP
 
-    # Setup the MIME (Multipurpose Internet Mail Extensions)
+    # Setup the MIME
     message = MIMEMultipart()
     message['From'] = sender_email
     message['To'] = receiver_email
@@ -125,20 +114,23 @@ def send_otp_email(receiver_email,otp):
     msg_body = f"Hello, your OTP for registration is: {otp}"
     message.attach(MIMEText(msg_body, 'plain'))
 
-    # Create SMTP session for sentind teh email
-    server = smtplib.SMTP('smtp.gmail.com', 587) 
-    server.starttls()
-    server.login(sender_email, sender_password)
-    text = message.as_string()
-    server.sendmail(sender_email, receiver_email, text)
-    print("mail is sent")
-    server.quit() # Quit the SMTP server
+    try:
+        # Create SMTP session
+        server = smtplib.SMTP('smtp.gmail.com', 587)  
+        server.starttls()
+        server.login(sender_email, sender_password)
+        text = message.as_string()
+        server.sendmail(sender_email, receiver_email, text)
+        print("Mail is sent")
+    except Exception as e:
+        print(f"Failed to send email: {e}")
+    finally:
+        server.quit()
 
     return otp
 # Signup function
 
 def generate_otp():
-    # Generate 6-digit OTP
     return randint(100000, 999999)
 
 
@@ -162,186 +154,180 @@ def delete_user(conn, username):
 # Endpoints
 
 def validate_password(password: str) -> bool:
-    """Validate the password to ensure it meets security criteria:
-    Minimum 8 characters, at least one uppercase letter, one lowercase letter,
-    one number, and one special character"""
+    # Minimum 8 characters, at least one uppercase letter, one lowercase letter, one number and one special character
     pattern = re.compile(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$')
     return bool(pattern.match(password))
 
 @app.post("/signup/")
 def signup(user: SignupUser):
-    # Endpoint to Signup
     if not validate_password(user.password):
         raise HTTPException(status_code=400, detail="Password does not meet the required standards. Must be at least 8 characters long, contain an uppercase letter, a lowercase letter, a number, and a special character.")
     
     conn = create_connection("user_data.db")
     if conn is not None:
-        cursor = conn.cursor()
-
-        # Check if the username or email already exists in the database
-        cursor.execute("SELECT username, email FROM users WHERE username = ? OR email = ?", (user.username, user.email))
-        existing_user = cursor.fetchone()
-        
-        if existing_user:
-            # Determine which attribute is already in use
-            if existing_user[0] == user.username:
-                detail = "Username already exists."
-            else:
-                detail = "Email already registered."
-            raise HTTPException(status_code=400, detail=detail)
-
-        # Proceed with creating the new user if no conflicts are found
-        hashed_password = bcrypt.hashpw(user.password.encode('utf-8'), bcrypt.gensalt())
-        otp=generate_otp()
         try:
-            # Insert new user to the database
-            cursor.execute("INSERT INTO users (username, email, password, registration_otp, email_verified) VALUES (?, ?, ?, ?, 0)",
-                           (user.username, user.email, hashed_password, otp))
-            conn.commit()
+            cursor = conn.cursor()
+            # Check if the username or email already exists
+            cursor.execute("SELECT username, email FROM users WHERE username = ? OR email = ?", (user.username, user.email))
+            existing_user = cursor.fetchone()
+            
+            if existing_user:
+                # Determine which attribute is already in use
+                if existing_user[0] == user.username:
+                    detail = "Username already exists."
+                else:
+                    detail = "Email already registered."
+                raise HTTPException(status_code=400, detail=detail)
 
-            # send otp to the user's email for verification
-            send_otp_email(user.email,otp)
-            return {"message": "Signup successful. Please verify your email to complete registration."}
-        except sqlite3.IntegrityError as e:
-            raise HTTPException(status_code=500, detail=f"Database error: {e}")
+            # Proceed with creating the new user if no conflicts are found
+            hashed_password = bcrypt.hashpw(user.password.encode('utf-8'), bcrypt.gensalt())
+            otp=generate_otp()
+            try:
+                cursor.execute("INSERT INTO users (username, email, password, registration_otp, email_verified) VALUES (?, ?, ?, ?, 0)",
+                            (user.username, user.email, hashed_password, otp))
+                conn.commit()
+                send_otp_email(user.email,otp)
+                return {"message": "Signup successful. Please verify your email to complete registration."}
+            except sqlite3.IntegrityError as e:
+                raise HTTPException(status_code=500, detail=f"Database error: {e}")
+        finally:
+            conn.close()
     else:
         raise HTTPException(status_code=500, detail="Database connection error.")
 
 @app.post("/verify-email/")
 def verify_email(verification: VerifyUser):
-
-    #Endpoint to handle email verification
     conn = create_connection("user_data.db")
     if conn is not None:
-        cursor = conn.cursor()
-        
-        #Retrieve the OTP for the given email from the database
-        cursor.execute("SELECT registration_otp FROM users WHERE email = ?", (verification.email,))
-        record = cursor.fetchone()
-        if record and record[0] == verification.otp:
-            # Update the user record to mark email as verified and clear the registration OTP
-            cursor.execute("UPDATE users SET email_verified = 1, registration_otp = NULL WHERE email = ?", (verification.email,))
-            conn.commit()
-            return {"message": "Email verified successfully. Your account is now active."}
-        else:
-            raise HTTPException(status_code=400, detail="Invalid OTP. Please try again or request a new OTP.")
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT registration_otp FROM users WHERE email = ?", (verification.email,))
+            record = cursor.fetchone()
+            if record and record[0] == verification.otp:
+                cursor.execute("UPDATE users SET email_verified = 1, registration_otp = NULL WHERE email = ?", (verification.email,))
+                conn.commit()
+                return {"message": "Email verified successfully. Your account is now active."}
+            else:
+                raise HTTPException(status_code=400, detail="Invalid OTP. Please try again or request a new OTP.")
+        finally:
+            conn.close()
     else:
         raise HTTPException(status_code=500, detail="Database connection error.")
 
 @app.post("/login/")
 def login(user: LoginUser):
-    # Endpoint to handle user login
-
     conn = create_connection("user_data.db")
     if conn is not None:
-        cursor = conn.cursor()
-        # Retrieve password, email_verified, failed_attempts, and last_attempt_time
-        cursor.execute("SELECT password, email_verified, failed_attempts, last_attempt_time FROM users WHERE username = ?", (user.username,))
-        user_record = cursor.fetchone()
+        try:
+            cursor = conn.cursor()
+            # Retrieve password, email_verified, failed_attempts, and last_attempt_time
+            cursor.execute("SELECT password, email_verified, failed_attempts, last_attempt_time FROM users WHERE username = ?", (user.username,))
+            user_record = cursor.fetchone()
 
-        if user_record:
-            stored_password, email_verified, failed_attempts, last_attempt_time = user_record
-            
-            # Check if the email is verified
-            if not email_verified:
-                raise HTTPException(status_code=403, detail="Please verify your email before logging in.")
+            if user_record:
+                stored_password, email_verified, failed_attempts, last_attempt_time = user_record
+                
+                # Check if the email is verified
+                if not email_verified:
+                    raise HTTPException(status_code=403, detail="Please verify your email before logging in.")
 
-            # Check if account is temporarily blocked
-            if last_attempt_time and (datetime.now() - datetime.strptime(last_attempt_time, '%Y-%m-%d %H:%M:%S')) < timedelta(minutes=5) and failed_attempts >= 3:
-                raise HTTPException(status_code=403, detail="Account locked due to multiple failed login attempts. Please try again later.")
-            hashed_password = bcrypt.hashpw(user.password.encode('utf-8'), bcrypt.gensalt())
-            # Check password
-            if bcrypt.checkpw(user.password.encode('utf-8'), stored_password):
-                # Reset failed_attempts if login is successful
-                cursor.execute("UPDATE users SET failed_attempts = 0, last_attempt_time = NULL WHERE username = ?", (user.username,))
-                conn.commit()
-                return {"message": "Login successful!"}
+                # Check if account is temporarily blocked
+                if last_attempt_time and (datetime.now() - datetime.strptime(last_attempt_time, '%Y-%m-%d %H:%M:%S')) < timedelta(minutes=5) and failed_attempts >= 3:
+                    raise HTTPException(status_code=403, detail="Account locked due to multiple failed login attempts. Please try again later.")
+                hashed_password = bcrypt.hashpw(user.password.encode('utf-8'), bcrypt.gensalt())
+                # Check password
+                if bcrypt.checkpw(user.password.encode('utf-8'), stored_password):
+                    # Reset failed_attempts if login is successful
+                    cursor.execute("UPDATE users SET failed_attempts = 0, last_attempt_time = NULL WHERE username = ?", (user.username,))
+                    conn.commit()
+                    return {"message": "Login successful!"}
+                else:
+                    # Update failed_attempts and last_attempt_time
+                    new_attempts = failed_attempts + 1
+                    cursor.execute("UPDATE users SET failed_attempts = ?, last_attempt_time = ? WHERE username = ?", (new_attempts, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), user.username))
+                    conn.commit()
+                    raise HTTPException(status_code=401, detail="Incorrect username or password.")
             else:
-                # Update failed_attempts and last_attempt_time
-                new_attempts = failed_attempts + 1
-                cursor.execute("UPDATE users SET failed_attempts = ?, last_attempt_time = ? WHERE username = ?", (new_attempts, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), user.username))
-                conn.commit()
-                raise HTTPException(status_code=401, detail="Incorrect username or password.")
-        else:
-            raise HTTPException(status_code=404, detail="User does not exist.")
+                raise HTTPException(status_code=404, detail="User does not exist.")
+        finally:
+            conn.close()
     else:
         raise HTTPException(status_code=500, detail="Database connection error.")
 
 @app.post("/forgot-password/")
 def forgot_password(request: ForgotPasswordRequest):
-    #Endpoint to handle forgotten password requests
     conn = create_connection("user_data.db")
     if conn is not None:
-        cursor = conn.cursor()
-        #check if the username exists and the email matches
-        cursor.execute("SELECT email FROM users WHERE username = ?", (request.username,))
-        record = cursor.fetchone()
-        if record and record[0] == request.email:
-            # otp = send_otp_email(request.email)
-
-            # Generate and send OTP to the user's email
-            otp=generate_otp()
-            send_otp_email(request.email,otp)
-            # Store the OTP in the database for future verification
-            cursor.execute("UPDATE users SET reset_otp = ? WHERE username = ?", (otp, request.username))
-            conn.commit()
-            return {"message": "OTP sent to your email. Please check your email to reset your password."}
-        else:
-            raise HTTPException(status_code=404, detail="No matching user found for the provided username and email.")
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT email FROM users WHERE username = ?", (request.username,))
+            record = cursor.fetchone()
+            if record and record[0] == request.email:
+                # otp = send_otp_email(request.email)
+                otp=generate_otp()
+                send_otp_email(request.email,otp)
+                cursor.execute("UPDATE users SET reset_otp = ? WHERE username = ?", (otp, request.username))
+                conn.commit()
+                return {"message": "OTP sent to your email. Please check your email to reset your password."}
+            else:
+                raise HTTPException(status_code=404, detail="No matching user found for the provided username and email.")
+        finally:
+            conn.close()
     else:
         raise HTTPException(status_code=500, detail="Database connection error.")
 
 @app.post("/reset-password/")
 def reset_password(request: ResetPasswordRequest):
-    #Endpoint to handle password reset requests
     conn = create_connection("user_data.db")
-    # Validate the new password using the validation function
     if not validate_password(request.new_password):
         raise HTTPException(status_code=400, detail="Password does not meet the required standards. Must be at least 8 characters long, contain an uppercase letter, a lowercase letter, a number, and a special character.")
     
     if conn is not None:
-        cursor = conn.cursor()
-        # Retrieve current OTP and check if it's valid
-        cursor.execute("SELECT reset_otp FROM users WHERE username = ?", (request.username,))
-        record = cursor.fetchone()
-        if record and str(record[0]) == str(request.otp):
-            # Update the user's password and reset account lock status
-            new_hashed_password = hashlib.sha256(request.new_password.encode()).hexdigest()
-            cursor.execute("UPDATE users SET password = ?, reset_otp = NULL, failed_attempts = 0, last_attempt_time = NULL WHERE username = ?", (new_hashed_password, request.username))
-            conn.commit()
-            return {"message": "Your password has been reset successfully. You can now log in with your new password."}
-        else:
-            raise HTTPException(status_code=400, detail="Invalid OTP. Please try again.")
+        try:
+            cursor = conn.cursor()
+            # Retrieve current OTP and check if it's valid
+            cursor.execute("SELECT reset_otp FROM users WHERE username = ?", (request.username,))
+            record = cursor.fetchone()
+            if record and str(record[0]) == str(request.otp):
+                # Update the user's password and reset account lock status
+                new_hashed_password = bcrypt.hashpw(request.password.encode('utf-8'), bcrypt.gensalt())
+                cursor.execute("UPDATE users SET password = ?, reset_otp = NULL, failed_attempts = 0, last_attempt_time = NULL WHERE username = ?", (new_hashed_password, request.username))
+                conn.commit()
+                return {"message": "Your password has been reset successfully. You can now log in with your new password."}
+            else:
+                raise HTTPException(status_code=400, detail="Invalid OTP. Please try again.")
+        finally:
+            conn.close()
     else:
         raise HTTPException(status_code=500, detail="Database connection error.")
 
 
 @app.delete("/delete/")
 def api_delete_user(user: DeleteUserRequest):
-    # Endpoint to handle user deletion request
     conn = create_connection("user_data.db")
+
     if conn is not None:
-        cursor = conn.cursor()
-        # Retrieve the stored password for verification
-        cursor.execute("SELECT password FROM users WHERE username = ?", (user.username,))
-        record = cursor.fetchone()
+        try:
+            cursor = conn.cursor()
+            # Retrieve the stored password for verification
+            cursor.execute("SELECT password FROM users WHERE username = ?", (user.username,))
+            record = cursor.fetchone()
 
-        if record:
-            stored_password = record[0]
-
-            # Check if the provided password matches the stored password
-            if hashlib.sha256(user.password.encode()).hexdigest() == stored_password:
-
-                # Proceed with deleting the user
-                if delete_user(conn, user.username):
-                    return {"message": "User deleted successfully."}
-                
+            if record:
+                stored_password = record[0]
+                # Check if the provided password matches the stored password
+                if bcrypt.checkpw(user.password.encode('utf-8'), stored_password):
+                    # Proceed with deleting the user
+                    if delete_user(conn, user.username):
+                        return {"message": "User deleted successfully."}
+                    else:
+                        raise HTTPException(status_code=404, detail="No user found with that username.")
                 else:
-                    raise HTTPException(status_code=404, detail="No user found with that username.")
+                    raise HTTPException(status_code=401, detail="Incorrect password.")
             else:
-                raise HTTPException(status_code=401, detail="Incorrect password.")
-        else:
-            raise HTTPException(status_code=404, detail="No user found with that username.")
+                raise HTTPException(status_code=404, detail="No user found with that username.")
+        finally:
+            conn.close()
     else:
         raise HTTPException(status_code=500, detail="Database connection error.")
 
@@ -349,5 +335,4 @@ def api_delete_user(user: DeleteUserRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    # run FastAPI app using uvicorn server
     uvicorn.run(app, host="0.0.0.0", port=8000)
